@@ -32,6 +32,7 @@
    History:
    17 Jun 1997	Creation (tate)
    7  Oct 1997	fix some comments (tate)
+   19 Jun 1998  fix read result as ssize_t (tate / pointed by msaitoh)
 
 */
 
@@ -163,7 +164,7 @@ openbpf(char *ifname, char **bufp, size_t *buflen){
    NULL if no more ARP frame
 */
 char *
-getarp(char *bpfframe, size_t bpfflen, char **next, size_t *nextlen){
+getarp(char *bpfframe, ssize_t bpfflen, char **next, ssize_t *nextlen){
     int	bias;
     char *p;
 
@@ -246,11 +247,10 @@ gen_arpreply(char *arpbuf, size_t *rlen){
 
 void
 loop(int fd, char *buf, size_t buflen){
-    size_t  rlen;
+    ssize_t  rlen;
     char    *p, *nextp;
-    size_t  nextlen;
+    ssize_t  nextlen;
     char    *rframe;
-    size_t  rframe_len;
     char    *sframe;
     size_t  sframe_len;
 
