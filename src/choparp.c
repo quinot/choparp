@@ -38,6 +38,7 @@
 
 #include <stdio.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <fcntl.h>
@@ -210,7 +211,7 @@ checkarp(char *arpbuf){
 	fprintf(stderr,"checkarp: WARNING: received unknown type ARP request.\n");
 	return(0);
     }
-    target_ip = ntohl(*(u_long *)(arp->arp_tpa));
+    target_ip = ntohl(*(u_int32_t *)(arp->arp_tpa));
     if ((target_ip & target_mask) == target_net)
 	return(-1);		/* OK */
     return(0);
@@ -253,13 +254,29 @@ loop(int fd, char *buf, size_t buflen){
     char    *rframe;
     char    *sframe;
     size_t  sframe_len;
+    fd_set  fdset;
+
+    FD_ZERO(&fdset);
+    FD_SET(fd,&fdset);
 
     for(;;){
-	if ((rlen = read(fd, buf, buflen)) <= 0){
-	    fprintf(stderr,"loop: read: %s\n", strerror(errno));
-	    /* XXX: restart itself if daemon mode */
-	    return;
-	}
+        int r = select(fd+1,&fdset, 0, 0, 0);
+
+        if (r < 0) {
+            if (errno == EINTR)
+                continue;
+            perror("select");
+            return;
+        }
+
+        rlen = read(fd, buf, buflen);
+        if (rlen < 0) {
+            if (errno == EINTR)
+                continue;
+            perror("read");
+            return;
+        }
+
 	p = buf;
 	while((rframe = getarp(p, rlen, &nextp, &nextlen)) != NULL){
 	    if (checkarp(rframe)){
