@@ -55,14 +55,25 @@
 #include <netinet/if_ether.h>
 #include <sys/param.h>
 #include <errno.h>
+#include <ifaddrs.h>
+#include <net/if_dl.h>
+
+#ifdef DEBUG
+#include <arpa/inet.h>
+#endif
 
 #define	BPFFILENAME	"/dev/bpf%d"	/* bpf file template */
 #ifndef	NBPFILTER			/* number of available bpf */
 # define NBPFILTER (16)
 #endif
 
-u_long	target_net;		/* target network address (host order) */
-u_long	target_mask;		/* target network netmask (host order) */
+struct cidr {
+	struct cidr *next;
+	u_int32_t addr;		/* addr and mask are host order */
+	u_int32_t mask;
+};
+
+struct cidr *targets = NULL, *excludes = NULL;
 u_char	target_mac[ETHER_ADDR_LEN];	/* target MAC address */
 
 /*
@@ -89,7 +100,7 @@ struct bpf_insn bpf_filter_arp[] = {
 int
 openbpf(char *ifname, char **bufp, size_t *buflen){
     char bpffile[sizeof(BPFFILENAME)+5];	/* XXX: */
-    int	fd;
+    int	fd = -1;
     int	n;
     struct bpf_version	bpf_version;
     struct ifreq	bpf_ifreq;
@@ -190,6 +201,22 @@ getarp(char *bpfframe, ssize_t bpfflen, char **next, ssize_t *nextlen){
 }
 
 /*
+   match
+
+   match an IP address against a list of address/netmask pairs
+*/
+
+static int
+match (u_int32_t addr, struct cidr *list) {
+    while (list) {
+	if ((addr & list->mask) == list->addr)
+	    return 1;
+	list = list->next;
+    }
+    return 0;
+}
+
+/*
    checkarp
 
    check responsibility of the ARP request
@@ -197,10 +224,11 @@ getarp(char *bpfframe, ssize_t bpfflen, char **next, ssize_t *nextlen){
 
    arpbuf is pointing top of link-level frame
 */
-int
+
+static int
 checkarp(char *arpbuf){
     struct ether_arp	*arp;
-    u_long	target_ip;
+    u_int32_t	target_ip;
 
     arp = (struct ether_arp *)(arpbuf + 14);	/* skip ethernet header */
     if (ntohs(arp->arp_hrd) != ARPHRD_ETHER ||
@@ -212,9 +240,7 @@ checkarp(char *arpbuf){
 	return(0);
     }
     target_ip = ntohl(*(u_int32_t *)(arp->arp_tpa));
-    if ((target_ip & target_mask) == target_net)
-	return(-1);		/* OK */
-    return(0);
+    return match(target_ip, targets) && !match(target_ip, excludes);
 }
 
 /*
@@ -253,7 +279,7 @@ loop(int fd, char *buf, size_t buflen){
     ssize_t  nextlen;
     char    *rframe;
     char    *sframe;
-    size_t  sframe_len;
+    size_t  frame_len;
     fd_set  fdset;
 
     FD_ZERO(&fdset);
@@ -280,8 +306,8 @@ loop(int fd, char *buf, size_t buflen){
 	p = buf;
 	while((rframe = getarp(p, rlen, &nextp, &nextlen)) != NULL){
 	    if (checkarp(rframe)){
-		sframe = gen_arpreply(rframe, &sframe_len);
-		write(fd, sframe, sframe_len);
+		sframe = gen_arpreply(rframe, &frame_len);
+		write(fd, sframe, frame_len);
 	    }
 	    p = nextp;
 	    rlen = nextlen;
@@ -291,12 +317,26 @@ loop(int fd, char *buf, size_t buflen){
 }
 
 int
-setmac(char *buf){
-    int	n;
-    u_int	m0, m1, m2, m3, m4, m5;
+setmac(char *addr, char *ifname){
+    u_int m0, m1, m2, m3, m4, m5;
 
-    if (sscanf(buf, "%x:%x:%x:%x:%x:%x", &m0, &m1, &m2, &m3, &m4, &m5) < 6)
-	return(-1);
+    if (!strcmp (addr, "auto")) {
+	struct ifaddrs *ifas, *ifa;
+
+	getifaddrs (&ifas);
+	for (ifa = ifas; ifa != NULL; ifa = ifa->ifa_next) {
+#define SDL ((struct sockaddr_dl *)ifa->ifa_addr)
+	    if (strcmp (ifa->ifa_name, ifname)
+	      || SDL->sdl_family != AF_LINK
+	      || SDL->sdl_alen != 6)
+		continue;
+	    memcpy (target_mac, SDL->sdl_data + SDL->sdl_nlen, 6);
+	    return 0;
+	}
+	return -1;
+    }
+    if (sscanf(addr, "%x:%x:%x:%x:%x:%x", &m0, &m1, &m2, &m3, &m4, &m5) < 6)
+        return(-1);
     target_mac[0] = (u_char )m0;
     target_mac[1] = (u_char )m1;
     target_mac[2] = (u_char )m2;
@@ -307,7 +347,7 @@ setmac(char *buf){
 }
 
 int
-atoip(char *buf, u_long *ip_addr){
+atoip(char *buf, u_int32_t *ip_addr){
     u_int	i0, i1, i2, i3;
 
     if (sscanf(buf, "%u.%u.%u.%u", &i0, &i1, &i2, &i3) == 4){
@@ -322,26 +362,80 @@ atoip(char *buf, u_long *ip_addr){
 
 void
 usage(void){
-    fprintf(stderr,"usage: choparp if_name mac_addr net_addr net_mask\n");
+    fprintf(stderr,"usage: choparp if_name mac_addr [-]addr/mask...\n");
     exit(-1);
 }
 
 int
 main(int argc, char **argv){
     int	fd;
-    char *buf;
+    char *buf, *ifname;
+    struct cidr **targets_tail = &targets, **excludes_tail = &excludes;
+#define APPEND(LIST,ADDR,MASK) \
+    do {							\
+	*(LIST ## _tail) = malloc(sizeof (struct cidr));	\
+	(*(LIST ## _tail))->addr = ADDR;			\
+	(*(LIST ## _tail))->mask = MASK;			\
+	(*(LIST ## _tail))->next = NULL;			\
+	(LIST ## _tail) = &(*(LIST ## _tail))->next;		\
+    } while (0)
     size_t buflen;
 
-    if (argc < 5)
+    if (argc < 4)
 	usage();
 
-    if (setmac(argv[2]) ||
-	atoip(argv[3], &target_net) ||
-	atoip(argv[4], &target_mask)){
+    ifname = argv[1];
+    if (setmac(argv[2], ifname))
 	usage();
+    argv += 3; argc -= 3;
+
+    while (argc > 0) {
+	u_int32_t addr, mask = ~0;
+        char *slash = strchr (*argv, '/');
+	int exclude = 0;
+
+	if (**argv == '-') {
+	    (*argv)++;
+	    exclude = 1;
+	}
+	if (slash != NULL)
+	    *(slash++) = '\0';
+	if (atoip (*argv, &addr))
+	    usage();
+	if (slash != NULL) {
+	    char *end;
+	    u_int32_t len = strtol (slash, &end, 10);
+	    if (*end == '\0')
+		mask <<= (32 - len);
+	    else if (atoip (slash, &mask))
+		usage();
+	}
+	if (exclude)
+	    APPEND(excludes, addr, mask);
+	else
+	    APPEND(targets, addr, mask);
+	argv++, argc--;
     }
 
-    if ((fd = openbpf(argv[1], &buf, &buflen)) < 0)
+#ifdef DEBUG
+#define SHOW(LIST) \
+    do {								\
+	struct cidr *t;							\
+	printf (#LIST ":\n");						\
+	for (t = LIST; t; t = t->next) {				\
+	    u_int32_t x;							\
+	    x = htonl (t->addr);					\
+	    printf ("  %s", inet_ntoa (*(struct in_addr *)&x));		\
+	    x = htonl (t->mask);					\
+	    printf ("/%s\n", inet_ntoa (*(struct in_addr *)&x));	\
+	}								\
+    } while (0)
+
+    SHOW(targets);
+    SHOW(excludes);
+    exit (0);
+#endif
+    if ((fd = openbpf(ifname, &buf, &buflen)) < 0)
 	return(-1);
     loop(fd, buf, buflen);
     return(-1);

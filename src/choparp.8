@@ -27,51 +27,79 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd October 7, 1997
+.Dd October 11, 2002
 .Dt CHOPARP 8
 .Os
 .Sh NAME
 .Nm choparp
-.Nd cheap and omitted proxy arp
+.Nd cheap and omitted proxy ARP
 .Sh SYNOPSIS
 .Nm chpoarp
-.Ar if_name mac_addr net_addr net_mask
+.Ar if_name mac_addr
+.Oo Fl Oc Ns Ar net_addr Ns
+.Op / Ns Ar net_mask
+.Ar ...
 .Sh DESCRIPTION
 .Pp
 .Nm choparp 
-is a easy-to-use proxy arp daemon.
-It watches arp request packets visible on the interface specified by argument
+is a easy-to-use proxy ARP daemon.
+It watches ARP request packets visible on the interface specified by argument
 .Ar if_name ,
-and sends proxy arp reply to the sender if the arp request queries the
-MAC address (ethernet hardware address) for the network speicified by
-.Ar net_addr
-and
-.Ar net_mask .
+and sends proxy ARP reply to the sender if the ARP request queries the
+MAC address
+.Pq ethernet hardware address
+for the network specified by
+.Ar net_addr Ns / Ar net_mask .
 .Pp
 .Ar mac_addr
-has to be the MAC address assigned to the interface
+is th MAC address to be published for the specified hosts.
+It is normally the address of
 .Ar if_name .
 The format of
 .Ar mac_addr
-must be 6 bytes of hexadecimal value, separated by colons (":") ;
-for example, "00:00:01:01:14:46".
-The format of
+must be 6 colon-separated bytes of hexadecimal value, such as
+.Ad 00:00:01:01:14:46 .
+The keyword
+.Ad auto
+can also be used to use the address of
+.Ar if_name
+from the system configuration
+.Pp
 .Ar net_addr
-and
+must be in dotted quad notation
+.Pq for example Ad 133.138.1.134
+or be a 32 bit hexadecimal value starting with
+.Dq 0x
+.Pq for example Ad 0x858a0186 .
 .Ar net_mask
-must be dot notation (say, 133.138.1.134) or 32bit hexadecimal value
-starting with "0x" (say, 0x858a0186).
+can likewise be speficied as a dotted quad or hexadecimal value,
+or alternatively as a mask length. The following address specifications
+are therefore equivalent:
+.Bl -item -offset indent
+.It
+.Ad 192.168.98.0/255.255.254.0
+.It
+.Ad 192.168.98.0/0xfffffe00
+.It
+.Ad 192.168.98.0/23
+.El
+.Pp
+Multiple addresses can be specified.
+Addresses can be
+.Em excluded
+by preceding them with
+.Fl
 .Sh EXAMPLES
-If you have network interface "ne0" with MAC address "00:00:01:01:14:16",
-and would like to send proxy arp reply for 192.168.0.64/26,
+If you have network interface
+.Dq ne0
+with MAC address
+.Dq 00:00:01:01:14:16 ,
+and would like to send proxy ARP reply for 192.168.0.64/26,
 the argument would be as follows:
 .Bd -literal -offset indent
-choparp ne0 00:00:01:01:14:46 192.168.0.64 255.255.255.192
+choparp ne0 00:00:01:01:14:46 192.168.0.64/255.255.255.192
 .Ed
 .Sh BUGS
-Supports ethernet interfaces only.
+Supports Ethernet interfaces only.
 Handles single interface at a time.
-(you can start multiple
-.Nm choparp
-for multiple interfaces, though)
-MAC address should be automatically detected.
+.Pq you can start multiple Nm choparp No for multiple interfaces, though .
