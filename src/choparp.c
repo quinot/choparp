@@ -47,6 +47,9 @@
 #include <net/if.h>
 #include <netinet/in.h>
 /* #include <net/if_arp.h> */
+#if (__FreeBSD__ >= 3)
+ #include <net/if_var.h>
+#endif
 #include <netinet/if_ether.h>
 #include <sys/param.h>
 #include <errno.h>
