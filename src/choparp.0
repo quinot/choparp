@@ -1,0 +1,29 @@
+NAME
+  choparp - cheap & omitted proxy arp
+
+SYNOPSIS
+  choparp if_name mac_addr net_addr net_mask
+
+DESCRIPTION
+  choparp は機能限定版の proxyarp daemon です。指定されたインターフェ
+イスを監視し、指定されたネットワークに対する ARP 要求に対して代理応答
+を行ないます。
+  if_name には監視すべきインターフェイス名を、mac_addr は ARP 要求に対
+して答えるべき MAC アドレスを指定します。choparp は ARP 要求の IP アド
+レスが net_addr と net_mask に合致すると、それに応答します。通常は 
+mac_addr は if_name で指定されたインターフェイスの MAC アドレスを用い
+ます。
+  mac_addr は 6バイトの 16進数をコロン(:)で区切った形式で、net_addr と 
+net_mask には ``dot notation'' もしくは 0x で始まる 16進数で指定します。
+
+EXAMLES
+  MAC アドレス 00:00:01:01:14:46 のインターフェイス ne0 を監視し、
+192.168.0.64/26 のアドレスに対する ARP 要求に対して代理応答する場合に
+は、次のように起動します。
+
+  choparp ne0 00:00:01:01:14:46 192.168.0.64 255.255.255.192
+
+BUGS
+  Ethernet フレームにしか対応していません。
+  一度に一つのインターフェイスしか操作できません。
+  MAC アドレスは自動的に取得すべきです。
