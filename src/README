@@ -1,6 +1,14 @@
 choparp README
 $Id$
 
+   Copyright (c) 1997 Takamichi Tateoka (tree@mma.club.uec.ac.jp)
+   Copyright (c) 2002 Thomas Quinot (thomas@cuivre.fr.eu.org)
+
+Changes and original English man page from the FreeBSD port by
+Jun-ichiro itojun Hagino <itojun@freebsd.org>.
+
+Changes from the NetBSD package by Darrin B. Jewell <dbj@netbsd.org>.
+
 choparp is a proxy ARP daemon. It listens for ARP requests on a
 network interface, and sends ARP replies with a specified MAC
 addresses when the requested IP addresses matches a user-provided
