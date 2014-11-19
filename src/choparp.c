@@ -109,7 +109,7 @@ openbpf(char *ifname, char **bufp, size_t *buflen){
 
     /* open BPF file */
     for (n=0; n<NBPFILTER; n++){
-	sprintf(bpffile, BPFFILENAME, n);
+	snprintf(bpffile, sizeof(bpffile), BPFFILENAME, n);
 	if ((fd = open(bpffile, O_RDWR, 0)) >= 0)
 	    break;
     }
@@ -354,7 +354,7 @@ atoip(char *buf, u_int32_t *ip_addr){
 	*ip_addr = (i0 << 24) + (i1 << 16) + (i2 << 8) + i3;
 	return(0);
     }
-    if (sscanf(buf, "0x%lx", ip_addr) == 1)
+    if (sscanf(buf, "0x%lx", (unsigned long *) ip_addr) == 1)
 	return(0);
 
     return(-1);	
