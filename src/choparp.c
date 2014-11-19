@@ -334,6 +334,20 @@ setmac(char *addr, char *ifname){
 	    return 0;
 	}
 	return -1;
+    } else if (!strncmp (addr, "vhid:", 4)) {
+        /*
+         * Virtual router mac address
+         * CARP address format: 00:00:5e:00:01:<VHID>
+         */
+        char *vhid = addr + 5;
+        if (!*vhid)
+            return(-1);
+        m0 = 0;
+        m1 = 0;
+        m2 = 0x5e;
+        m3 = 0;
+        m4 = 1;
+        m5 = atoi(vhid);
     }
     if (sscanf(addr, "%x:%x:%x:%x:%x:%x", &m0, &m1, &m2, &m3, &m4, &m5) < 6)
         return(-1);
