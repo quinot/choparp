@@ -85,7 +85,7 @@ struct bpf_insn bpf_filter_arp[] = {
     BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, ETHERTYPE_ARP, 0, 3), /* check it */
     BPF_STMT(BPF_LD+BPF_H+BPF_ABS, 20),	/* load OP code */
     BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, ARPOP_REQUEST, 0, 1),  /* check it */
-    BPF_STMT(BPF_RET+BPF_K, 14+28),	/* return Ethernet encap ARP req. */
+    BPF_STMT(BPF_RET+BPF_K, ETHER_HDR_LEN+sizeof(struct ether_arp)),	/* return Ethernet encap ARP req. */
     /* XXX: IEEE 802.2/802.3 Encap (RFC1042) should be available... */
     BPF_STMT(BPF_RET+BPF_K, 0),		/* discard */
 };
@@ -109,7 +109,7 @@ openbpf(char *ifname, char **bufp, size_t *buflen){
 
     /* open BPF file */
     for (n=0; n<NBPFILTER; n++){
-	sprintf(bpffile, BPFFILENAME, n);
+	snprintf(bpffile, sizeof(bpffile), BPFFILENAME, n);
 	if ((fd = open(bpffile, O_RDWR, 0)) >= 0)
 	    break;
     }
@@ -230,12 +230,12 @@ checkarp(char *arpbuf){
     struct ether_arp	*arp;
     u_int32_t	target_ip;
 
-    arp = (struct ether_arp *)(arpbuf + 14);	/* skip ethernet header */
+    arp = (struct ether_arp *)(arpbuf + ETHER_HDR_LEN);	/* skip ethernet header */
     if (ntohs(arp->arp_hrd) != ARPHRD_ETHER ||
 	/* XXX: ARPHRD_802 */
 	ntohs(arp->arp_pro) != ETHERTYPE_IP ||
 	(int) (arp->arp_hln) != ETHER_ADDR_LEN || /* length of ethernet addr */
-	(int) (arp->arp_pln) != 4){  /* length of protocol addr */
+	(int) (arp->arp_pln) != sizeof(struct in_addr)){ /* length of protocol addr */
 	fprintf(stderr,"checkarp: WARNING: received unknown type ARP request.\n");
 	return(0);
     }
@@ -261,14 +261,15 @@ gen_arpreply(char *arpbuf, size_t *rlen){
     memcpy(arpbuf, arpbuf+ETHER_ADDR_LEN, ETHER_ADDR_LEN);
     memcpy(arpbuf+ETHER_ADDR_LEN, target_mac, ETHER_ADDR_LEN);
     /* set result of ARP request */
-    arp = (struct ether_arp *)(arpbuf + 14);	/* skip ethernet header */
-    memcpy(ipbuf, arp->arp_tpa, 4);		/* save protocol addr */
-    memcpy(arp->arp_tha, arp->arp_sha, 10); /* set target hard/proto addr */
-    memcpy(arp->arp_spa, ipbuf, 4);		/* set source protocol addr */
+    arp = (struct ether_arp *)(arpbuf + ETHER_HDR_LEN);	/* skip ethernet header */
+    memcpy(ipbuf, arp->arp_tpa, sizeof(ipbuf));	/* save protocol addr */
+    memcpy(arp->arp_tha, arp->arp_sha, sizeof(arp->arp_tha)); /* set target hard addr */
+    memcpy(arp->arp_tpa, arp->arp_spa, sizeof(arp->arp_tpa)); /* set target proto addr */
+    memcpy(arp->arp_spa, ipbuf, sizeof(ipbuf));		/* set source protocol addr */
     memcpy(arp->arp_sha, target_mac, ETHER_ADDR_LEN); /* set source hard addr */
     arp->arp_op = htons(ARPOP_REPLY);
 
-    *rlen = 14 + 28;		/* ethernet header & arp reply */
+    *rlen = ETHER_HDR_LEN + sizeof(struct ether_arp);   /* ethernet header & arp reply */
     return(arpbuf);
 }
 
@@ -328,12 +329,24 @@ setmac(char *addr, char *ifname){
 #define SDL ((struct sockaddr_dl *)ifa->ifa_addr)
 	    if (strcmp (ifa->ifa_name, ifname)
 	      || SDL->sdl_family != AF_LINK
-	      || SDL->sdl_alen != 6)
+	      || SDL->sdl_alen != ETHER_ADDR_LEN)
 		continue;
-	    memcpy (target_mac, SDL->sdl_data + SDL->sdl_nlen, 6);
+	    memcpy (target_mac, SDL->sdl_data + SDL->sdl_nlen, ETHER_ADDR_LEN);
 	    return 0;
 	}
 	return -1;
+    } else if (!strncmp (addr, "vhid", 4)) {
+        // virtual router mac address
+        // CARP address format: 00:00:0e:00:01:<HEX_VHID>
+        char *vhid = addr + 4;
+        if (!*vhid)
+            return(-1);
+        m0 = 0;
+        m1 = 0;
+        m2 = 0x5e;
+        m3 = 0;
+        m4 = 1;
+        m5 = atoi(vhid);
     }
     if (sscanf(addr, "%x:%x:%x:%x:%x:%x", &m0, &m1, &m2, &m3, &m4, &m5) < 6)
         return(-1);
@@ -354,7 +367,7 @@ atoip(char *buf, u_int32_t *ip_addr){
 	*ip_addr = (i0 << 24) + (i1 << 16) + (i2 << 8) + i3;
 	return(0);
     }
-    if (sscanf(buf, "0x%lx", ip_addr) == 1)
+    if (sscanf(buf, "0x%lx", (unsigned long *) ip_addr) == 1)
 	return(0);
 
     return(-1);	
