@@ -2,7 +2,7 @@
    choparp - cheap & omitted proxy arp
 
    Copyright (c) 1997 Takamichi Tateoka (tree@mma.club.uec.ac.jp)
-   Copyright (c) 2002 Thomas Quinot (thomas@cuivre.fr.eu.org)
+   Copyright (c) 2002-2015 Thomas Quinot (thomas@cuivre.fr.eu.org)
    
    Redistribution and use in source and binary forms, with or without
    modification, are permitted provided that the following conditions
@@ -36,285 +36,126 @@
 
 */
 
+#define _GNU_SOURCE /* asprintf */
+
+#include <pcap.h>
 #include <stdio.h>
-#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
-#include <fcntl.h>
-#include <sys/time.h>
-#include <sys/ioctl.h>
-#include <net/bpf.h>
-#include <sys/socket.h>
 #include <net/if.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 #include <netinet/in.h>
-/* #include <net/if_arp.h> */
-#if (__FreeBSD__ >= 3)
- #include <net/if_var.h>
-#endif
 #include <netinet/if_ether.h>
-#include <sys/param.h>
-#include <errno.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+
+#ifndef __linux__
 #include <ifaddrs.h>
 #include <net/if_dl.h>
-
-#ifdef DEBUG
-#include <arpa/inet.h>
 #endif
 
-#define	BPFFILENAME	"/dev/bpf%d"	/* bpf file template */
-#ifndef	NBPFILTER			/* number of available bpf */
-# define NBPFILTER (16)
-#endif
+/* ARP Header                                      */ 
+#define ARP_REQUEST 1   /* ARP Request             */ 
+#define ARP_REPLY 2     /* ARP Reply               */ 
 
 struct cidr {
 	struct cidr *next;
-	u_int32_t addr;		/* addr and mask are host order */
-	u_int32_t mask;
+	struct in_addr addr;		/* addr and mask are host order */
+	struct in_addr mask;
 };
 
 struct cidr *targets = NULL, *excludes = NULL;
-u_char	target_mac[ETHER_ADDR_LEN];	/* target MAC address */
+char errbuf[PCAP_ERRBUF_SIZE];
+u_char target_mac[ETHER_ADDR_LEN];	/* target MAC address */
 
-/*
-   ARP filter program
-*/
-struct bpf_insn bpf_filter_arp[] = {
-    /* check Ethernet Encapsulation (RFC894) first */
-    BPF_STMT(BPF_LD+BPF_H+BPF_ABS, 12),	/* load frame type */
-    BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, ETHERTYPE_ARP, 0, 3), /* check it */
-    BPF_STMT(BPF_LD+BPF_H+BPF_ABS, 20),	/* load OP code */
-    BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, ARPOP_REQUEST, 0, 1),  /* check it */
-    BPF_STMT(BPF_RET+BPF_K, ETHER_HDR_LEN+sizeof(struct ether_arp)),	/* return Ethernet encap ARP req. */
-    /* XXX: IEEE 802.2/802.3 Encap (RFC1042) should be available... */
-    BPF_STMT(BPF_RET+BPF_K, 0),		/* discard */
-};
+char* cidr_to_str(struct cidr *a) {
+    char buf[64];
+    char *res = NULL;
+    int res_alloc, res_len;
+    int len;
 
-/*
-   openbpf:
+    while (a) {
+        if (a->mask.s_addr == INADDR_NONE) {
+            len = snprintf(buf, sizeof buf, "dst host %s", inet_ntoa(a->addr));
+        } else {
+            len = snprintf(buf, sizeof buf, "dst net %s mask ", inet_ntoa(a->addr));
+            len += snprintf(buf + len, sizeof buf - len, "%s", inet_ntoa(a->mask));
+        }
 
-   open bpf & set ARP filter program for named interface &
-   allocate enough buffer for BPF.
-   return file descripter or -1 for error
-*/
-int
-openbpf(char *ifname, char **bufp, size_t *buflen){
-    char bpffile[sizeof(BPFFILENAME)+5];	/* XXX: */
-    int	fd = -1;
-    int	n;
-    struct bpf_version	bpf_version;
-    struct ifreq	bpf_ifreq;
-    u_int	ui;
-    struct bpf_program	bpf_program;
+        if (!res) {
+            res_alloc = 1024;
+            res = malloc(res_alloc);
+            strncpy(res, buf, res_alloc);
+            res_len = len;
 
-    /* open BPF file */
-    for (n=0; n<NBPFILTER; n++){
-	snprintf(bpffile, sizeof(bpffile), BPFFILENAME, n);
-	if ((fd = open(bpffile, O_RDWR, 0)) >= 0)
-	    break;
+        } else {
+            if (res_len + len + 5 > res_alloc) {
+                res_alloc *= 2;
+                res = realloc(res, res_alloc);
+            }
+            strncat(res, " or ", res_alloc - res_len - 1);
+            res_len += 4;
+            strncat(res, buf, res_alloc - res_len - 1);
+            res_len += len;
+        }
+
+        a = a->next;
     }
-    if (fd < 0){
-	fprintf(stderr,"openbpf: Can't open BPF\n");
-	return(-1);		/* error */
-    }
-
-    /* check version number */
-    if ((ioctl(fd, BIOCVERSION, &bpf_version) == -1) ||
-	bpf_version.bv_major != BPF_MAJOR_VERSION ||
-	bpf_version.bv_minor < BPF_MINOR_VERSION){
-	fprintf(stderr,"openbpf: incorrect BPF version\n");
-	close(fd);
-	return(-1);
-    }
-
-    /* set interface name */
-    strncpy(bpf_ifreq.ifr_name, ifname, IFNAMSIZ);
-    bpf_ifreq.ifr_name[IFNAMSIZ-1] = '\0';	/* paranoia */
-    if (ioctl(fd, BIOCSETIF, &bpf_ifreq) == -1){
-	fprintf(stderr,"openbpf: BIOCSETIF failed for interface <%s>\n",
-		ifname);
-	close(fd);
-	return(-1);
-    }
-
-    /* set BPF immediate mode */
-    ui = 1;
-    if (ioctl(fd, BIOCIMMEDIATE, &ui) == -1){
-	fprintf(stderr,"openbpf: BIOCIMMEDIATE failed.\n");
-	close(fd);
-	return(-1);
-    }
-
-    /* set ARP request filter */
-    bpf_program.bf_len = sizeof(bpf_filter_arp) / sizeof(struct bpf_insn);
-    bpf_program.bf_insns = bpf_filter_arp;
-    if (ioctl(fd, BIOCSETF, &bpf_program) == -1){
-	fprintf(stderr,"openbpf: BIOCSETF failed.\n");
-	close(fd);
-	return(-1);
-    }
-
-    /* allocate reasonable size & alimented buffer */
-    if (ioctl(fd, BIOCGBLEN, &ui) == -1){
-	fprintf(stderr,"openbpf: BIOCGBLEN failed.\n");
-	close(fd);
-	return(-1);
-    }
-    *buflen = (size_t)ui;
-    if ((*bufp = (char *)malloc((size_t) ui)) == NULL){
-	fprintf(stderr,"openbpf: malloc failed.\n");
-	close(fd);
-	return(-1);
-    }
-
-    return(fd);
+    return res;
 }
 
-/*
-   get ARP datalink frame pointer
+pcap_t *
+open_pcap(char *ifname, char *filter_str) {
+    pcap_t *pc = NULL;
+    struct bpf_program filter;
 
-   NULL if no more ARP frame
-*/
-char *
-getarp(char *bpfframe, ssize_t bpfflen, char **next, ssize_t *nextlen){
-    int	bias;
-    char *p;
-
-    if (bpfframe == NULL || bpfflen == 0)
-	return(NULL);
-
-    bias = BPF_WORDALIGN(((struct bpf_hdr *)bpfframe)->bh_hdrlen +
-			 ((struct bpf_hdr *)bpfframe)->bh_caplen);
-    if (bias < bpfflen){
-	/* there is another packet packed into same bpf frame */
-	*next = bpfframe + bias;
-	*nextlen = (size_t) bpfflen - bias;
-    } else {
-	/* no more packet */
-	*next = NULL;
-	*nextlen = 0;
+    /* Set up PCAP */
+    if ((pc = pcap_open_live(ifname, 128, 0,  512, errbuf))==NULL){
+       fprintf(stderr, "pcap_open_live failed: %s\n", errbuf);
+       exit(1);
+    }
+    
+    /* Compiles the filter expression */ 
+    if (pcap_compile(pc, &filter, filter_str, 1, PCAP_NETMASK_UNKNOWN) == -1){
+       fprintf(stderr, "pcap_compile failed: %s\n", pcap_geterr(pc) );
+       exit(1);
     }
 
-    /* cut off BPF header */
-    p = bpfframe + ((struct bpf_hdr *)bpfframe)->bh_hdrlen;
-    return(p);
-}
-
-/*
-   match
-
-   match an IP address against a list of address/netmask pairs
-*/
-
-static int
-match (u_int32_t addr, struct cidr *list) {
-    while (list) {
-	if ((addr & list->mask) == list->addr)
-	    return 1;
-	list = list->next;
+    /* Set filter program */ 
+    if (pcap_setfilter(pc, &filter) == -1){
+       fprintf(stderr, "pcap_setfilter failed: %s\n", pcap_geterr(pc));
+       exit(1);
     }
-    return 0;
-}
 
-/*
-   checkarp
-
-   check responsibility of the ARP request
-   return true if responsible
-
-   arpbuf is pointing top of link-level frame
-*/
-
-static int
-checkarp(char *arpbuf){
-    struct ether_arp	*arp;
-    u_int32_t	target_ip;
-
-    arp = (struct ether_arp *)(arpbuf + ETHER_HDR_LEN);	/* skip ethernet header */
-    if (ntohs(arp->arp_hrd) != ARPHRD_ETHER ||
-	/* XXX: ARPHRD_802 */
-	ntohs(arp->arp_pro) != ETHERTYPE_IP ||
-	(int) (arp->arp_hln) != ETHER_ADDR_LEN || /* length of ethernet addr */
-	(int) (arp->arp_pln) != sizeof(struct in_addr)){ /* length of protocol addr */
-	fprintf(stderr,"checkarp: WARNING: received unknown type ARP request.\n");
-	return(0);
-    }
-    target_ip = ntohl(*(u_int32_t *)(arp->arp_tpa));
-    return match(target_ip, targets) && !match(target_ip, excludes);
-}
-
-/*
-   genarpreply
-
-   generate arp reply link level frame
-   arpbuf is pointing top of link-level frame
-   this routine overwrite arpbuf
-
-   return reply buffer & its length
-*/
-char *
-gen_arpreply(char *arpbuf, size_t *rlen){
-    struct ether_arp	*arp;
-    u_char	ipbuf[4];	/* sender IP */
-
-    /* set ethernet dst/src address */
-    memcpy(arpbuf, arpbuf+ETHER_ADDR_LEN, ETHER_ADDR_LEN);
-    memcpy(arpbuf+ETHER_ADDR_LEN, target_mac, ETHER_ADDR_LEN);
-    /* set result of ARP request */
-    arp = (struct ether_arp *)(arpbuf + ETHER_HDR_LEN);	/* skip ethernet header */
-    memcpy(ipbuf, arp->arp_tpa, sizeof(ipbuf));	/* save protocol addr */
-    memcpy(arp->arp_tha, arp->arp_sha, sizeof(arp->arp_tha)); /* set target hard addr */
-    memcpy(arp->arp_tpa, arp->arp_spa, sizeof(arp->arp_tpa)); /* set target proto addr */
-    memcpy(arp->arp_spa, ipbuf, sizeof(ipbuf));		/* set source protocol addr */
-    memcpy(arp->arp_sha, target_mac, ETHER_ADDR_LEN); /* set source hard addr */
-    arp->arp_op = htons(ARPOP_REPLY);
-
-    *rlen = ETHER_HDR_LEN + sizeof(struct ether_arp);   /* ethernet header & arp reply */
-    return(arpbuf);
+    pcap_freecode(&filter);
+    return pc;
 }
 
 void
-loop(int fd, char *buf, size_t buflen){
-    ssize_t  rlen;
-    char    *p, *nextp;
-    ssize_t  nextlen;
-    char    *rframe;
-    char    *sframe;
-    size_t  frame_len;
-    fd_set  fdset;
+gen_arpreply(u_char *buf) {
+    struct ether_arp *arp;
+    struct in_addr ipbuf;
 
-    FD_ZERO(&fdset);
-    FD_SET(fd,&fdset);
+    /* set ethernet dst/src address */
+    memcpy(buf, buf+ETHER_ADDR_LEN, ETHER_ADDR_LEN);
+    memcpy(buf+ETHER_ADDR_LEN, target_mac, ETHER_ADDR_LEN);
 
-    for(;;){
-        int r = select(fd+1,&fdset, 0, 0, 0);
+    /* set result of ARP request */
+    arp = (struct ether_arp *)(buf + ETHER_HDR_LEN);
+    memcpy((char*) &ipbuf, arp->arp_tpa, sizeof(ipbuf));	/* save protocol addr */
+    memcpy(arp->arp_tha, arp->arp_sha, sizeof(arp->arp_tha)); /* set target hard addr */
+    memcpy(arp->arp_tpa, arp->arp_spa, sizeof(arp->arp_tpa)); /* set target proto addr */
+    memcpy(arp->arp_spa, (char *)&ipbuf, sizeof(ipbuf));	              /* set source protocol addr */
+    memcpy(arp->arp_sha, target_mac, ETHER_ADDR_LEN);         /* set source hard addr */
+    arp->arp_op = htons(ARPOP_REPLY);
+}
 
-        if (r < 0) {
-            if (errno == EINTR)
-                continue;
-            perror("select");
-            return;
-        }
-
-        rlen = read(fd, buf, buflen);
-        if (rlen < 0) {
-            if (errno == EINTR)
-                continue;
-            perror("read");
-            return;
-        }
-
-	p = buf;
-	while((rframe = getarp(p, rlen, &nextp, &nextlen)) != NULL){
-	    if (checkarp(rframe)){
-		sframe = gen_arpreply(rframe, &frame_len);
-		write(fd, sframe, frame_len);
-	    }
-	    p = nextp;
-	    rlen = nextlen;
-	}
-    }
-    /* not reach */
+void
+process_arp(u_char *user, const struct pcap_pkthdr *pkthdr, const u_char *packet) {
+    gen_arpreply((u_char *)packet);
+    pcap_inject((pcap_t *)user, packet, pkthdr->len);
 }
 
 int
@@ -322,19 +163,40 @@ setmac(char *addr, char *ifname){
     u_int m0, m1, m2, m3, m4, m5;
 
     if (!strcmp (addr, "auto")) {
-	struct ifaddrs *ifas, *ifa;
+#ifdef __linux__
+        int fd;
+        struct ifreq ifr;
 
-	getifaddrs (&ifas);
-	for (ifa = ifas; ifa != NULL; ifa = ifa->ifa_next) {
+        if ((fd = socket(PF_INET, SOCK_STREAM, 0)) == -1) {
+            perror("socket");
+            return -1;
+        }
+
+        strncpy(ifr.ifr_name, ifname, sizeof ifr.ifr_name);
+
+        if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
+            perror("ioctl(SIOCGIFHWADDR)");
+            return -1;
+        }
+        memcpy(target_mac, ifr.ifr_hwaddr.sa_data, ETHER_ADDR_LEN);
+        return 0;
+#else
+        struct ifaddrs *ifas, *ifa;
+
+        getifaddrs (&ifas);
+        for (ifa = ifas; ifa != NULL; ifa = ifa->ifa_next) {
 #define SDL ((struct sockaddr_dl *)ifa->ifa_addr)
-	    if (strcmp (ifa->ifa_name, ifname)
-	      || SDL->sdl_family != AF_LINK
-	      || SDL->sdl_alen != ETHER_ADDR_LEN)
-		continue;
-	    memcpy (target_mac, SDL->sdl_data + SDL->sdl_nlen, ETHER_ADDR_LEN);
-	    return 0;
-	}
-	return -1;
+            if (strcmp (ifa->ifa_name, ifname)
+              || SDL->sdl_family != AF_LINK
+              || SDL->sdl_alen != ETHER_ADDR_LEN)
+                continue;
+            memcpy (target_mac, SDL->sdl_data + SDL->sdl_nlen, ETHER_ADDR_LEN);
+            return 0;
+        }
+#endif
+        fprintf(stderr, "%s: not found\n", ifname);
+        return -1;
+
     } else if (!strncmp (addr, "vhid:", 4)) {
         /*
          * Virtual router mac address
@@ -349,9 +211,10 @@ setmac(char *addr, char *ifname){
         m3 = 0;
         m4 = 1;
         m5 = atoi(vhid);
-    }
-    if (sscanf(addr, "%x:%x:%x:%x:%x:%x", &m0, &m1, &m2, &m3, &m4, &m5) < 6)
+    } else if (sscanf(addr, "%x:%x:%x:%x:%x:%x", &m0, &m1, &m2, &m3, &m4, &m5) < 6) {
+        fprintf(stderr, "invalid MAC address: %s", addr);
         return(-1);
+    }
     target_mac[0] = (u_char )m0;
     target_mac[1] = (u_char )m1;
     target_mac[2] = (u_char )m2;
@@ -383,25 +246,26 @@ usage(void){
 
 int
 main(int argc, char **argv){
-    int	fd;
-    char *buf, *ifname;
+    pcap_t *pc;
+    char *ifname;
+    char *filter, *targets_filter, *excludes_filter;
     struct cidr **targets_tail = &targets, **excludes_tail = &excludes;
 #define APPEND(LIST,ADDR,MASK) \
     do {							\
 	*(LIST ## _tail) = malloc(sizeof (struct cidr));	\
-	(*(LIST ## _tail))->addr = ADDR;			\
-	(*(LIST ## _tail))->mask = MASK;			\
+	(*(LIST ## _tail))->addr.s_addr = htonl(ADDR);		\
+	(*(LIST ## _tail))->mask.s_addr = htonl(MASK);		\
 	(*(LIST ## _tail))->next = NULL;			\
 	(LIST ## _tail) = &(*(LIST ## _tail))->next;		\
     } while (0)
-    size_t buflen;
 
     if (argc < 4)
 	usage();
 
     ifname = argv[1];
-    if (setmac(argv[2], ifname))
-	usage();
+    if (setmac(argv[2], ifname)) {
+        exit(1);
+    }
     argv += 3; argc -= 3;
 
     while (argc > 0) {
@@ -429,29 +293,47 @@ main(int argc, char **argv){
 	    APPEND(excludes, addr, mask);
 	else
 	    APPEND(targets, addr, mask);
+
 	argv++, argc--;
     }
 
 #ifdef DEBUG
 #define SHOW(LIST) \
-    do {								\
-	struct cidr *t;							\
-	printf (#LIST ":\n");						\
-	for (t = LIST; t; t = t->next) {				\
-	    u_int32_t x;							\
-	    x = htonl (t->addr);					\
-	    printf ("  %s", inet_ntoa (*(struct in_addr *)&x));		\
-	    x = htonl (t->mask);					\
-	    printf ("/%s\n", inet_ntoa (*(struct in_addr *)&x));	\
-	}								\
+    do {							\
+	struct cidr *t;						\
+	fprintf (stderr, #LIST ":\n");				\
+	for (t = LIST; t; t = t->next) {			\
+	    fprintf (stderr, "  %s", inet_ntoa (t->addr));	\
+	    fprintf (stderr, "/%s\n", inet_ntoa (t->mask));	\
+	}							\
     } while (0)
 
     SHOW(targets);
     SHOW(excludes);
     exit (0);
 #endif
-    if ((fd = openbpf(ifname, &buf, &buflen)) < 0)
-	return(-1);
-    loop(fd, buf, buflen);
-    return(-1);
+
+    targets_filter = cidr_to_str(targets);
+    excludes_filter = cidr_to_str(excludes);
+
+#define TMPL_FILTER "arp[2:2] == 0x0800 " /* Protocol: IPv4 */       \
+                    "and arp[4] == 6 "    /* Hw addr length: 6 */    \
+                    "and arp[5] == 4 "    /* Proto addr length: 4 */ \
+                    "and arp[6:2] == 1 "  /* Operation: Request */   \
+                    "and (%s)"
+
+#define EXCL_FILTER TMPL_FILTER " and not (%s)"
+    if (excludes_filter == NULL)
+        asprintf (&filter, TMPL_FILTER, targets_filter);
+    else
+        asprintf (&filter, EXCL_FILTER, targets_filter, excludes_filter);
+
+#ifdef DEBUG
+        fprintf(stderr, "Filter on %s: %s\n", ifname, filter);
+#endif
+    if ((pc = open_pcap(ifname, filter)) < 0)
+	exit(1);
+    free(filter);
+    pcap_loop(pc, 0, process_arp, (u_char*)pc);
+    exit(1);
 }
