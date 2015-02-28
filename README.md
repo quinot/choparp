@@ -1,22 +1,36 @@
-choparp README
-$Id$
+choparp
+=======
 
-   Copyright (c) 1997 Takamichi Tateoka (tree@mma.club.uec.ac.jp)
-   Copyright (c) 2002 Thomas Quinot (thomas@cuivre.fr.eu.org)
+  * Copyright (c) 1997 Takamichi Tateoka (tree@mma.club.uec.ac.jp)
+  * Copyright (c) 2002-2015 Thomas Quinot (thomas@cuivre.fr.eu.org)
 
 Changes and original English man page from the FreeBSD port by
 Jun-ichiro itojun Hagino <itojun@freebsd.org>.
 
 Changes from the NetBSD package by Darrin B. Jewell <dbj@netbsd.org>.
 
+Introduction
+------------
+
 choparp is a proxy ARP daemon. It listens for ARP requests on a
 network interface, and sends ARP replies with a specified MAC
 addresses when the requested IP addresses matches a user-provided
 list.
 
+Build instructions
+------------------
+
+Requires libpcap.
+
+`gcc -o choparp choparp.c -lpcap`
+
+Usage example
+-------------
+
 For example, assume following VLSM subnet.  R1 and H1 must have
 routing entry for subnet B (172.21.139.32/28).
 
+```
   +----+                            +----+
   | R1 |                            | H1 |
   +-+--+                            +----+
@@ -36,6 +50,7 @@ routing entry for subnet B (172.21.139.32/28).
                              +----+
                              | H2 |
                              +----+
+```
 
 If you can not set such routing entry, R1 and H1 treat hosts on the
 subnet B as on the subnet A.  In this case, H1 broadcast ARP request
@@ -60,33 +75,3 @@ they are used as network address and broadcast address for subnet B.
 
 Enjoy!
 
-/*
-   choparp - cheap & omitted proxy arp
-
-   Copyright (c) 1997 Takamichi Tateoka (tree@mma.club.uec.ac.jp)
-   Copyright (c) 2002 Thomas Quinot (thomas@cuivre.fr.eu.org)
-   
-   Redistribution and use in source and binary forms, with or without
-   modification, are permitted provided that the following conditions
-   are met:
-   1. Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-   2. Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in the
-      documentation and/or other materials provided with the distribution.
-   3. Neither the name of the authors nor the names of their contributors
-      may be used to endorse or promote products derived from this software
-      without specific prior written permission.
-   
-   THIS SOFTWARE IS PROVIDED BY THE AUTHORS AND CONTRIBUTORS ``AS IS'' AND
-   ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-   IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-   ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
-   FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-   DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
-   OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-   HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-   LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
-   OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-   SUCH DAMAGE.
-*/
