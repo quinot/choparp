@@ -48,6 +48,7 @@
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 
@@ -247,7 +248,8 @@ usage(void){
 int
 main(int argc, char **argv){
     pcap_t *pc;
-    char *ifname;
+    int pidf;
+    char *ifname, pidfile[128];
     char *filter, *targets_filter, *excludes_filter;
     struct cidr **targets_tail = &targets, **excludes_tail = &excludes;
 #define APPEND(LIST,ADDR,MASK) \
@@ -334,6 +336,16 @@ main(int argc, char **argv){
     if ((pc = open_pcap(ifname, filter)) < 0)
 	exit(1);
     free(filter);
+
+    bzero(pidfile, 128);
+    sprintf(pidfile, "/var/run/choparp_%s.pid", ifname);
+    pidf = open(pidfile, O_RDWR | O_CREAT | O_FSYNC, 0600);
+    if (pidf > 0) {
+        ftruncate(pidf, 0);
+        dprintf(pidf, "%u\n", getpid());
+        close(pidf);
+    }
+
     pcap_loop(pc, 0, process_arp, (u_char*)pc);
     exit(1);
 }
