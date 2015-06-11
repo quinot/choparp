@@ -42,6 +42,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <net/if.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -70,6 +71,9 @@ struct cidr {
 struct cidr *targets = NULL, *excludes = NULL;
 char errbuf[PCAP_ERRBUF_SIZE];
 u_char target_mac[ETHER_ADDR_LEN];	/* target MAC address */
+
+static char *pidfile = NULL;
+static pcap_t *pc;
 
 char* cidr_to_str(struct cidr *a) {
     char buf[64];
@@ -151,6 +155,16 @@ gen_arpreply(u_char *buf) {
     memcpy(arp->arp_spa, (char *)&ipbuf, sizeof(ipbuf));	              /* set source protocol addr */
     memcpy(arp->arp_sha, target_mac, ETHER_ADDR_LEN);         /* set source hard addr */
     arp->arp_op = htons(ARPOP_REPLY);
+}
+
+void
+cleanup(int sig){
+     if (pidfile != NULL)
+         unlink(pidfile);
+
+     pcap_breakloop(pc);
+     pcap_close(pc);
+     exit(0);
 }
 
 void
@@ -241,17 +255,18 @@ atoip(char *buf, u_int32_t *ip_addr){
 
 void
 usage(void){
-    fprintf(stderr,"usage: choparp if_name mac_addr [-]addr/mask...\n");
+    fprintf(stderr,"usage: choparp [-p PIDFILE] if_name mac_addr [-]addr/mask...\n");
     exit(-1);
 }
 
 int
 main(int argc, char **argv){
-    pcap_t *pc;
-    int pidf;
-    char *ifname, pidfile[128];
+    int pidf, opt;
+    char *ifname;
     char *filter, *targets_filter, *excludes_filter;
     struct cidr **targets_tail = &targets, **excludes_tail = &excludes;
+    struct sigaction act;
+
 #define APPEND(LIST,ADDR,MASK) \
     do {							\
 	*(LIST ## _tail) = malloc(sizeof (struct cidr));	\
@@ -261,14 +276,32 @@ main(int argc, char **argv){
 	(LIST ## _tail) = &(*(LIST ## _tail))->next;		\
     } while (0)
 
-    if (argc < 4)
+    while ((opt = getopt(argc, argv, "p:")) != -1) {
+        switch (opt) {
+        case 'p':
+            pidfile = optarg;
+            break;
+        case '?':
+            usage();
+        }
+    }
+
+    if (pidfile == NULL) {
+        argv++;
+        argc--;
+    } else {
+        argv += 3;
+        argc -= 3;
+    }
+
+    if (argc < 3)
 	usage();
 
-    ifname = argv[1];
-    if (setmac(argv[2], ifname)) {
+    ifname = argv[0];
+    if (setmac(argv[1], ifname)) {
         exit(1);
     }
-    argv += 3; argc -= 3;
+    argv += 2; argc -= 2;
 
     while (argc > 0) {
 	u_int32_t addr, mask = ~0;
@@ -337,13 +370,17 @@ main(int argc, char **argv){
 	exit(1);
     free(filter);
 
-    bzero(pidfile, 128);
-    sprintf(pidfile, "/var/run/choparp_%s.pid", ifname);
-    pidf = open(pidfile, O_RDWR | O_CREAT | O_FSYNC, 0600);
-    if (pidf > 0) {
-        ftruncate(pidf, 0);
-        dprintf(pidf, "%u\n", getpid());
-        close(pidf);
+    if (pidfile != NULL) {
+        pidf = open(pidfile, O_RDWR | O_CREAT | O_FSYNC, 0600);
+        if (pidf > 0) {
+            ftruncate(pidf, 0);
+            dprintf(pidf, "%u\n", getpid());
+            close(pidf);
+            memset(&act, 0, sizeof(act));
+            act.sa_handler = cleanup;
+            sigaction(SIGINT, &act, NULL);
+            sigaction(SIGTERM, &act, NULL);
+        }
     }
 
     pcap_loop(pc, 0, process_arp, (u_char*)pc);
