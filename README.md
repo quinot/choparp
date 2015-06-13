@@ -7,7 +7,10 @@ choparp
 Changes and original English man page from the FreeBSD port by
 Jun-ichiro itojun Hagino <itojun@freebsd.org>.
 
-Changes from the NetBSD package by Darrin B. Jewell <dbj@netbsd.org>.
+With contributions from:
+
+ * Darrin B. Jewell <dbj@netbsd.org>.
+ * Renato Botelho <garga@FreeBSD.org>
 
 Introduction
 ------------
