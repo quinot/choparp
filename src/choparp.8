@@ -35,13 +35,14 @@
 .Nd cheap and omitted proxy ARP
 .Sh SYNOPSIS
 .Nm chpoarp
+.Op Fl p Ar file
 .Ar if_name mac_addr
 .Oo Fl Oc Ns Ar net_addr Ns
 .Op / Ns Ar net_mask
 .Ar ...
 .Sh DESCRIPTION
 .Pp
-.Nm choparp 
+.Nm choparp
 is a easy-to-use proxy ARP daemon.
 It watches ARP request packets visible on the interface specified by argument
 .Ar if_name ,
@@ -49,61 +50,83 @@ and sends proxy ARP reply to the sender if the ARP request queries the
 MAC address
 .Pq ethernet hardware address
 for the network specified by
-.Ar net_addr Ns / Ar net_mask .
+.Ar net_addr Ns / Ns Ar net_mask .
 .Pp
+.Bl -tag -width indent
+.It Fl p Ar file
+Save process id to the given file.
+.It Ar if_name
+Network interface on which to listen and respond to ARP requests.
+.It Ar mac_addr
+The MAC address to be published for the specified hosts, in one of three formats.
+.Bl -tag -width indent
+.It Ar xx:xx:xx:xx:xx:xx
+Static value specified as 6 colon-separated byte values in hexadecimal.
+.It Ar vhid: Ns Oo <nnn>|0x<xx> Oc
+Virtual router (VRRP/CARP) address with the final octet (VRID)
+given by decimal value <nnn> or hexadecimal value <xx> .
+.It Ar auto
+Usually,
 .Ar mac_addr
-is th MAC address to be published for the specified hosts.
-It is normally the address of
+is the address of
 .Ar if_name .
-The format of
-.Ar mac_addr
-must be 6 colon-separated bytes of hexadecimal value, such as
-.Ad 00:00:01:01:14:46 .
-The keyword
-.Ad auto
-can also be used to use the address of
+Specify the keyword
+.Sy auto
+to use the address of
 .Ar if_name
-from the system configuration.
-.Pp
-A
-.Xr carp 4
-virtual router address can be specified as
-.Ad vhid:<hex>
+detected from the system configuration.
+.El
 .
-.Pp
-.Ar net_addr
-must be in dotted quad notation
-.Pq for example Ad 133.138.1.134
-or be a 32 bit hexadecimal value starting with
+.It Ar net_addr
+IPv4 address in either dotted quad notation
+.Pq for example Ar 192.0.2.2
+or, BSD-style, as a 32 bit hexadecimal value starting with
 .Dq 0x
-.Pq for example Ad 0x858a0186 .
+.Pq for example Ar 0x858a0186 .
+.It Ar net_mask
+Alone,
+.Ar net_addr
+specifies a single host; to specify an IP range, include a
 .Ar net_mask
-can likewise be speficied as a dotted quad or hexadecimal value,
-or alternatively as a mask length. The following address specifications
-are therefore equivalent:
+in the same way one would specify a subnet.
+Full 32-bit values may be in either dotted-decimal and BSD-style hexadecimal format.
+Prefix lengths may be specified in CIDR notation.
+The following address specifications are equivalent:
 .Bl -item -offset indent
 .It
-.Ad 192.168.98.0/255.255.254.0
+.Ar 192.0.2.0/255.255.254.0
 .It
-.Ad 192.168.98.0/0xfffffe00
+.Ar 0xc0000200/0xfffffe00
 .It
-.Ad 192.168.98.0/23
+.Ar 192.0.2.0/0xfffffe00
+.It
+.Ar 192.0.2.0/23
 .El
 .Pp
-Multiple addresses can be specified.
-Addresses can be
-.Em excluded
-by preceding them with
-.Fl
+Address matches may be either affirmative or negative, with affirmative as the default.
+To exclude an address or range, specify a negative match with a prefix
+.Dq -
+(dash) prefix.
+Multiple matches may be specified, with at least one being affirmative.
+.El
 .Sh EXAMPLES
 If you have network interface
 .Dq ne0
 with MAC address
-.Dq 00:00:01:01:14:16 ,
-and would like to send proxy ARP reply for 192.168.0.64/26,
+.Dq 00:00:5e:00:53:01
+, and would like to send proxy ARP reply for 192.168.0.64/26,
 the argument would be as follows:
 .Bd -literal -offset indent
-choparp ne0 00:00:01:01:14:46 192.168.0.64/255.255.255.192
+choparp ne0 00:00:5e:00:53:01 192.168.0.64/26
+.Ed
+.Pp
+Were
+.Dq ne0
+assigned the IPv4 address 192.168.0.65/26,
+you could additionally exclude the the host address and all-ones and all-zeroes
+broadcast addresses as follows:
+.Bd -literal -offset indent
+choparp ne0 00:00:5e:00:53:01 192.168.0.64/26 -192.168.0.64/31 -192.168.0.127
 .Ed
 .Sh BUGS
 Supports Ethernet interfaces only.
