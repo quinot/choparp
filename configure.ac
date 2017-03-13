@@ -40,7 +40,7 @@ AC_CHECK_HEADER([pcap.h], [], [AC_MSG_ERROR([missing required header pcap.h])])
 # Checks for library functions.
 AC_FUNC_MALLOC
 AC_FUNC_REALLOC
-AC_CHECK_FUNCS([ftruncate inet_ntoa memset socket strchr strtol])
+AC_CHECK_FUNCS([ftruncate inet_ntop memset socket strchr strtol])
 
 # Do final output.
 AC_OUTPUT

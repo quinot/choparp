@@ -76,36 +76,25 @@ static char *pidfile = NULL;
 static pcap_t *pc;
 
 char* cidr_to_str(struct cidr *a) {
-    char buf[64];
-    char *res = NULL;
-    int res_alloc, res_len;
-    int len;
+    char addr[INET_ADDRSTRLEN], mask[INET_ADDRSTRLEN];
+    char *res = NULL, *oldres = NULL;
+    char *prefix = "";
+    char *sep = "";
 
     while (a) {
-        if (a->mask.s_addr == INADDR_NONE) {
-            len = snprintf(buf, sizeof buf, "dst host %s", inet_ntoa(a->addr));
-        } else {
-            len = snprintf(buf, sizeof buf, "dst net %s mask ", inet_ntoa(a->addr));
-            len += snprintf(buf + len, sizeof buf - len, "%s", inet_ntoa(a->mask));
+        inet_ntop(AF_INET, &a->addr, addr, sizeof(addr));
+        inet_ntop(AF_INET, &a->mask, mask, sizeof(mask));
+        if (a->mask.s_addr == INADDR_NONE
+            ? asprintf(&res, "%s%sdst host %s", prefix, sep, addr) < 0
+            : asprintf(&res, "%s%sdst net %s mask %s", prefix, sep, addr, mask) < 0
+        ) {
+            perror("asprintf");
+            exit(1);
         }
 
-        if (!res) {
-            res_alloc = 1024;
-            res = malloc(res_alloc);
-            strncpy(res, buf, res_alloc);
-            res_len = len;
-
-        } else {
-            if (res_len + len + 5 > res_alloc) {
-                res_alloc *= 2;
-                res = realloc(res, res_alloc);
-            }
-            strncat(res, " or ", res_alloc - res_len - 1);
-            res_len += 4;
-            strncat(res, buf, res_alloc - res_len - 1);
-            res_len += len;
-        }
-
+        free(oldres);
+        prefix = oldres = res;
+        sep = " or ";
         a = a->next;
     }
     return res;
@@ -182,12 +171,16 @@ setmac(char *addr, char *ifname){
         int fd;
         struct ifreq ifr;
 
+        if (strlen(ifname) + 1 > sizeof(ifr.ifr_name)) {
+            fprintf(stderr, "if_name too long: %s\n", ifname);
+            exit(1);
+        }
+        strcpy(ifr.ifr_name, ifname);
+
         if ((fd = socket(PF_INET, SOCK_STREAM, 0)) == -1) {
             perror("socket");
             return -1;
         }
-
-        strncpy(ifr.ifr_name, ifname, sizeof ifr.ifr_name);
 
         if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
             perror("ioctl(SIOCGIFHWADDR)");
@@ -212,7 +205,7 @@ setmac(char *addr, char *ifname){
         fprintf(stderr, "%s: not found\n", ifname);
         return -1;
 
-    } else if (!strncmp (addr, "vhid:", 4)) {
+    } else if (!strncmp (addr, "vhid:", 5)) {
         /*
          * Virtual router mac address
          * CARP address format: 00:00:5e:00:01:<VHID>
