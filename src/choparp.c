@@ -327,7 +327,7 @@ main(int argc, char **argv){
 	(LIST ## _tail) = &(*(LIST ## _tail))->next;		\
     } while (0)
 
-    while ((opt = getopt(argc, argv, "p:")) != -1) {
+    while ((opt = getopt(argc, argv, "+p:")) != -1) {
         switch (opt) {
         case 'p':
             pidfile = optarg;
@@ -337,13 +337,8 @@ main(int argc, char **argv){
         }
     }
 
-    if (pidfile == NULL) {
-        argv++;
-        argc--;
-    } else {
-        argv += 3;
-        argc -= 3;
-    }
+    argv += optind;
+    argc -= optind;
 
     if (argc < 3)
 	usage();
