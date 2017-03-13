@@ -36,6 +36,7 @@
 .Sh SYNOPSIS
 .Nm chpoarp
 .Op Fl p Ar file
+.Op Fl v
 .Ar if_name mac_addr
 .Oo Fl Oc Ns Ar net_addr Ns
 .Op / Ns Ar net_mask
@@ -55,6 +56,8 @@ for the network specified by
 .Bl -tag -width indent
 .It Fl p Ar file
 Save process id to the given file.
+.It Fl v
+Send diagnostic messages to stdout. Repeat to increase verbosity.
 .It Ar if_name
 Network interface on which to listen and respond to ARP requests.
 .It Ar mac_addr

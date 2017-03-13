@@ -74,6 +74,7 @@ char errbuf[PCAP_ERRBUF_SIZE];
 u_char target_mac[ETHER_ADDR_LEN];	/* target MAC address */
 
 static char *pidfile = NULL;
+static int verbose = 0;
 static pcap_t *pc;
 
 char* cidr_to_str(struct cidr *a) {
@@ -327,11 +328,15 @@ main(int argc, char **argv){
 	(LIST ## _tail) = &(*(LIST ## _tail))->next;		\
     } while (0)
 
-    while ((opt = getopt(argc, argv, "+p:")) != -1) {
+    while ((opt = getopt(argc, argv, "+p:vh")) != -1) {
         switch (opt) {
         case 'p':
             pidfile = optarg;
             break;
+        case 'v':
+            ++verbose;
+            break;
+        case 'h':
         case '?':
             usage();
         }
@@ -376,7 +381,6 @@ main(int argc, char **argv){
 	argv++, argc--;
     }
 
-#ifdef DEBUG
 #define SHOW(LIST) \
     do {							\
 	struct cidr *t;						\
@@ -387,10 +391,10 @@ main(int argc, char **argv){
 	}							\
     } while (0)
 
-    SHOW(targets);
-    SHOW(excludes);
-    exit (0);
-#endif
+    if (verbose >= 3) {
+        SHOW(targets);
+        SHOW(excludes);
+    }
 
     targets_filter = cidr_to_str(targets);
     excludes_filter = cidr_to_str(excludes);
@@ -416,9 +420,8 @@ main(int argc, char **argv){
     free(targets_filter);
     free(excludes_filter);
 
-#ifdef DEBUG
-        fprintf(stderr, "Filter on %s: %s\n", ifname, filter);
-#endif
+    if (verbose)
+        printf("Filter on %s: %s\n", ifname, filter);
 
     pc = open_pcap(ifname, filter);
     free(filter);
