@@ -164,7 +164,7 @@ process_arp(u_char *user, const struct pcap_pkthdr *pkthdr, const u_char *packet
 
 int
 setmac(char *addr, char *ifname){
-    u_int m0, m1, m2, m3, m4, m5;
+    unsigned m0, m1, m2, m3, m4, m5;
 
     if (!strcmp (addr, "auto")) {
 #ifdef __linux__
@@ -234,16 +234,19 @@ setmac(char *addr, char *ifname){
 
 int
 atoip(char *buf, u_int32_t *ip_addr){
-    u_int	i0, i1, i2, i3;
+    unsigned i0, i1, i2, i3;
+    unsigned long hex_addr;
 
     if (sscanf(buf, "%u.%u.%u.%u", &i0, &i1, &i2, &i3) == 4){
-	*ip_addr = (i0 << 24) + (i1 << 16) + (i2 << 8) + i3;
-	return(0);
+        *ip_addr = (i0 << 24) + (i1 << 16) + (i2 << 8) + i3;
+        return 0;
     }
-    if (sscanf(buf, "0x%lx", (unsigned long *) ip_addr) == 1)
-	return(0);
+    if (sscanf(buf, "0x%lx", &hex_addr) >= 1) {
+        *ip_addr = (u_int32_t)hex_addr;
+        return 0;
+    }
 
-    return(-1);	
+    return -1;
 }
 
 void
