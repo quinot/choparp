@@ -52,6 +52,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <errno.h>
 
 #ifndef __linux__
 #include <ifaddrs.h>
@@ -154,13 +155,36 @@ gen_arpreply(u_char *buf) {
 }
 
 void
-cleanup(int sig){
-     if (pidfile != NULL)
-         unlink(pidfile);
+cleanup_pidfile() {
+    if (pidfile != NULL)
+        unlink(pidfile);
+}
 
-     pcap_breakloop(pc);
-     pcap_close(pc);
-     exit(0);
+void
+breakloop_pc(int sig) {
+    pcap_breakloop(pc);
+}
+
+void
+setup_pidfile() {
+    int fd;
+    FILE *fp;
+    if (pidfile == NULL)
+        return;
+
+    /* errno may or may not be set to something useful */
+    errno = 0;
+    if (
+        (fd = open(pidfile, O_WRONLY | O_CREAT | O_SYNC, 0600)) < 0
+        || atexit(cleanup_pidfile) < 0
+        || ftruncate(fd, 0) < 0
+        || (fp = fdopen(fd, "w")) == NULL
+        || fprintf(fp, "%ld\n", (long)getpid()) < 0
+        || fclose(fp) == EOF
+    ) {
+        perror("failed to create pidfile");
+        exit(1);
+    }
 }
 
 void
@@ -169,7 +193,7 @@ process_arp(u_char *user, const struct pcap_pkthdr *pkthdr, const u_char *packet
     pcap_inject((pcap_t *)user, packet, pkthdr->len);
 }
 
-int
+void
 setmac(char *addr, char *ifname){
     int len = 0;
     unsigned m0, m1, m2, m3, m4, m5;
@@ -187,19 +211,23 @@ setmac(char *addr, char *ifname){
 
         if ((fd = socket(PF_INET, SOCK_STREAM, 0)) == -1) {
             perror("socket");
-            return -1;
+            exit(1);
         }
 
         if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
             perror("ioctl(SIOCGIFHWADDR)");
-            return -1;
+            exit(1);
         }
         memcpy(target_mac, ifr.ifr_hwaddr.sa_data, ETHER_ADDR_LEN);
-        return 0;
+        close(fd);
+        return;
 #else
         struct ifaddrs *ifas, *ifa;
 
-        getifaddrs (&ifas);
+        if(getifaddrs(&ifas) < 0) {
+            perror("getifaddrs");
+            exit(1);
+        }
         for (ifa = ifas; ifa != NULL; ifa = ifa->ifa_next) {
 #define SDL ((struct sockaddr_dl *)ifa->ifa_addr)
             if (strcmp (ifa->ifa_name, ifname)
@@ -207,13 +235,14 @@ setmac(char *addr, char *ifname){
               || SDL->sdl_alen != ETHER_ADDR_LEN)
                 continue;
             memcpy (target_mac, SDL->sdl_data + SDL->sdl_nlen, ETHER_ADDR_LEN);
-            return 0;
+            freeifaddrs(ifas);
+            return;
         }
-#endif
         fprintf(stderr, "%s: not found\n", ifname);
-        return -1;
-
-    } else if (sscanf(addr, "vhid:%n", &len) >= 0 && len) {
+        exit(2);
+#endif
+    }
+    if (sscanf(addr, "vhid:%n", &len) >= 0 && len) {
         /*
          * Virtual router mac address
          * CARP address format: 00:00:5e:00:01:<VHID>
@@ -225,7 +254,7 @@ setmac(char *addr, char *ifname){
             || sscanf(addr, "vhid:%u%n", &vhid, &len) > 0;
         if (!matched || addr[len] || vhid > 0xff) {
             fprintf(stderr, "invalid vhid spec: %s\n", addr);
-            exit(-1);
+            exit(2);
         }
         target_mac[0] = 0;
         target_mac[1] = 0;
@@ -234,10 +263,11 @@ setmac(char *addr, char *ifname){
         target_mac[4] = 1;
         target_mac[5] = (u_char)vhid;
         return;
-    } else if (sscanf(addr, "%2x:%2x:%2x:%2x:%2x:%2x%n", &m0, &m1, &m2, &m3, &m4, &m5, &len) < 6
+    }
+    if (sscanf(addr, "%2x:%2x:%2x:%2x:%2x:%2x%n", &m0, &m1, &m2, &m3, &m4, &m5, &len) < 6
         || addr[len]) {
         fprintf(stderr, "invalid MAC address: %s", addr);
-        return(-1);
+        exit(2);
     }
     target_mac[0] = (u_char )m0;
     target_mac[1] = (u_char )m1;
@@ -245,7 +275,6 @@ setmac(char *addr, char *ifname){
     target_mac[3] = (u_char )m3;
     target_mac[4] = (u_char )m4;
     target_mac[5] = (u_char )m5;
-    return(0);
 }
 
 int
@@ -278,12 +307,12 @@ atoip(char *buf, u_int32_t *ip_addr){
 void
 usage(void){
     fprintf(stderr,"usage: choparp [-p PIDFILE] if_name mac_addr [-]addr/mask...\n");
-    exit(-1);
+    exit(2);
 }
 
 int
 main(int argc, char **argv){
-    int pidf, opt;
+    int opt;
     char *ifname;
     char *filter, *targets_filter, *excludes_filter;
     struct cidr **targets_tail = &targets, **excludes_tail = &excludes;
@@ -320,9 +349,7 @@ main(int argc, char **argv){
 	usage();
 
     ifname = argv[0];
-    if (setmac(argv[1], ifname)) {
-        exit(1);
-    }
+    setmac(argv[1], ifname);
     argv += 2; argc -= 2;
 
     while (argc > 0) {
@@ -384,31 +411,34 @@ main(int argc, char **argv){
         fprintf(stderr, "at least one address range must be an affirmative match\n");
         exit(1);
     }
-    if (excludes_filter == NULL)
-        asprintf (&filter, TMPL_FILTER, targets_filter);
-    else
-        asprintf (&filter, EXCL_FILTER, targets_filter, excludes_filter);
+    if (excludes_filter == NULL
+        ? asprintf(&filter, TMPL_FILTER, targets_filter) < 0
+        : asprintf(&filter, EXCL_FILTER, targets_filter, excludes_filter) < 0
+    ) {
+        perror("asprintf");
+        exit(1);
+    }
+    free(targets_filter);
+    free(excludes_filter);
 
 #ifdef DEBUG
         fprintf(stderr, "Filter on %s: %s\n", ifname, filter);
 #endif
-    if ((pc = open_pcap(ifname, filter)) < 0)
-	exit(1);
+
+    pc = open_pcap(ifname, filter);
     free(filter);
 
-    if (pidfile != NULL) {
-        pidf = open(pidfile, O_RDWR | O_CREAT | O_FSYNC, 0600);
-        if (pidf > 0) {
-            ftruncate(pidf, 0);
-            dprintf(pidf, "%u\n", getpid());
-            close(pidf);
-            memset(&act, 0, sizeof(act));
-            act.sa_handler = cleanup;
-            sigaction(SIGINT, &act, NULL);
-            sigaction(SIGTERM, &act, NULL);
-        }
-    }
+    setup_pidfile();
 
-    pcap_loop(pc, 0, process_arp, (u_char*)pc);
-    exit(1);
+    memset(&act, 0, sizeof(act));
+    act.sa_handler = breakloop_pc;
+    sigaction(SIGINT, &act, NULL);
+    sigaction(SIGTERM, &act, NULL);
+
+    if (pcap_loop(pc, 0, process_arp, (u_char*)pc) == -1) {
+        pcap_perror(pc, "pcap_loop");
+        exit(1);
+    }
+    pcap_close(pc);
+    exit(0);
 }
