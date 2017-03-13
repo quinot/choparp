@@ -18,6 +18,9 @@ AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE([subdir-objects foreign -Wall -Werror])
 AC_CONFIG_FILES([Makefile])
 
+# TAP test driver support
+AC_PROG_AWK
+AC_REQUIRE_AUX_FILE([tap-driver.sh])
 
 # Checks for programs, e.g., AC_PROG_CC
 AC_PROG_CC
