@@ -104,6 +104,7 @@ pcap_t *
 open_pcap(char *ifname, char *filter_str) {
     pcap_t *pc = NULL;
     struct bpf_program filter;
+    int dlt;
 
     /* Set up PCAP */
     if ((pc = pcap_open_live(ifname, 128, 0,  512, errbuf))==NULL){
@@ -120,6 +121,12 @@ open_pcap(char *ifname, char *filter_str) {
     /* Set filter program */ 
     if (pcap_setfilter(pc, &filter) == -1){
        fprintf(stderr, "pcap_setfilter failed: %s\n", pcap_geterr(pc));
+       exit(1);
+    }
+
+    /* wired ethernet only */
+    if ((dlt = pcap_datalink(pc)) != DLT_EN10MB) {
+       fprintf(stderr, "unsupported link type: %s\n", pcap_datalink_val_to_name(dlt));
        exit(1);
     }
 
@@ -164,6 +171,7 @@ process_arp(u_char *user, const struct pcap_pkthdr *pkthdr, const u_char *packet
 
 int
 setmac(char *addr, char *ifname){
+    int len = 0;
     unsigned m0, m1, m2, m3, m4, m5;
 
     if (!strcmp (addr, "auto")) {
@@ -205,21 +213,29 @@ setmac(char *addr, char *ifname){
         fprintf(stderr, "%s: not found\n", ifname);
         return -1;
 
-    } else if (!strncmp (addr, "vhid:", 5)) {
+    } else if (sscanf(addr, "vhid:%n", &len) >= 0 && len) {
         /*
          * Virtual router mac address
          * CARP address format: 00:00:5e:00:01:<VHID>
          */
-        char *vhid = addr + 5;
-        if (!*vhid)
-            return(-1);
-        m0 = 0;
-        m1 = 0;
-        m2 = 0x5e;
-        m3 = 0;
-        m4 = 1;
-        m5 = atoi(vhid);
-    } else if (sscanf(addr, "%x:%x:%x:%x:%x:%x", &m0, &m1, &m2, &m3, &m4, &m5) < 6) {
+        unsigned vhid;
+        /* allow decimal and hexadecimal (leading zero is decimal, not octal) */
+        int matched =
+            sscanf(addr, "vhid:0x%x%n", &vhid, &len) > 0
+            || sscanf(addr, "vhid:%u%n", &vhid, &len) > 0;
+        if (!matched || addr[len] || vhid > 0xff) {
+            fprintf(stderr, "invalid vhid spec: %s\n", addr);
+            exit(-1);
+        }
+        target_mac[0] = 0;
+        target_mac[1] = 0;
+        target_mac[2] = 0x5e;
+        target_mac[3] = 0;
+        target_mac[4] = 1;
+        target_mac[5] = (u_char)vhid;
+        return;
+    } else if (sscanf(addr, "%2x:%2x:%2x:%2x:%2x:%2x%n", &m0, &m1, &m2, &m3, &m4, &m5, &len) < 6
+        || addr[len]) {
         fprintf(stderr, "invalid MAC address: %s", addr);
         return(-1);
     }
@@ -236,12 +252,22 @@ int
 atoip(char *buf, u_int32_t *ip_addr){
     unsigned i0, i1, i2, i3;
     unsigned long hex_addr;
+    int len = 0;
 
-    if (sscanf(buf, "%u.%u.%u.%u", &i0, &i1, &i2, &i3) == 4){
+    if (sscanf(buf, "%u.%u.%u.%u%n", &i0, &i1, &i2, &i3, &len) >= 4
+        && i0 <= 0xff
+        && i1 <= 0xff
+        && i2 <= 0xff
+        && i3 <= 0xff
+        && !buf[len]
+    ) {
         *ip_addr = (i0 << 24) + (i1 << 16) + (i2 << 8) + i3;
         return 0;
     }
-    if (sscanf(buf, "0x%lx", &hex_addr) >= 1) {
+    if (sscanf(buf, "0x%lx%n", &hex_addr, &len) >= 1
+        && hex_addr <= 0xffffffff
+        && !buf[len]
+    ) {
         *ip_addr = (u_int32_t)hex_addr;
         return 0;
     }
@@ -354,6 +380,10 @@ main(int argc, char **argv){
                     "and (%s)"
 
 #define EXCL_FILTER TMPL_FILTER " and not (%s)"
+    if (targets_filter == NULL) {
+        fprintf(stderr, "at least one address range must be an affirmative match\n");
+        exit(1);
+    }
     if (excludes_filter == NULL)
         asprintf (&filter, TMPL_FILTER, targets_filter);
     else
