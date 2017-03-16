@@ -337,7 +337,7 @@ main(int argc, char **argv){
             ++verbose;
             break;
         case 'h':
-        case '?':
+        default:
             usage();
         }
     }
