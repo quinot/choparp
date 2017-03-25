@@ -4,7 +4,8 @@ man_MANS = src/choparp.8
 
 AM_TESTS_ENVIRONMENT = \
 	choparp_abspath='$(abs_top_builddir)'/choparp; \
-	export choparp_abspath;
+	sh_test_shell='$(SHELL)' \
+	export choparp_abspath sh_test_shell;
 
 LOG_DRIVER = \
 	env AM_TAP_AWK='$(AWK)' $(SHELL) $(top_srcdir)/build-aux/tap-driver.sh

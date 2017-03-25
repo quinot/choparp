@@ -8,17 +8,18 @@ fi
 
 CHOPARP_NETNS="$(ls -ld /proc/$$/ns/net)"
 CHOPARP_NETNS="${CHOPARP_NETNS#*->}"
+STAGE="${1-stage1}"
 
-if [ -z "$TAP_RUNNER_NETNS" ]
+if [ "${TAP_RUNNER_NETNS+set}" != "set" ] && [ "$STAGE" = "stage1" ]
 then
 	export LC_CTYPE=C
 	export TAP_RUNNER_NETNS="$CHOPARP_NETNS"
+	# stash and restore stdout, pass pipeline as file descriptor 5
 	exec 4>&1
-	GOT_NETNS=$(unshare --user --map-root-user --net /bin/sh $0 5>&1 1>&4)
-	ev=$?
-	if [ "$GOT_NETNS" != "GOT_NETNS" ]
+	STAGE2_STATUS=$(unshare --user --map-root-user --net "$sh_test_shell" "$0" stage2 5>&1 1>&4)
+	if [ "$STAGE2_STATUS" != "STAGE2_REACHED" ]
 	then
-		echo "1..0 # Skipped: unable to create private network namespace (need root?)"
+		echo "1..0 # Skipped: unable to create private user/network namespace (need root?)"
 	fi
 	exit
 fi
@@ -28,7 +29,8 @@ then
 	exit 1
 fi
 
-echo GOT_NETNS >&5
+echo "1..9"
+echo STAGE2_REACHED >&5
 
 rnd_byte="$(dd if=/dev/urandom bs=1 count=1 2>/dev/null | od -A n -t d)"
 
@@ -58,8 +60,6 @@ found() {
 	ip -4 neigh show dev who-has | \
 		grep -i -q "$(ipaddr $1) lladdr ${2:-.*} REACHABLE"
 }
-
-echo "1..9"
 
 set -x
 
