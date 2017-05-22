@@ -17,4 +17,4 @@ SH_LOG_DRIVER = $(LOG_DRIVER)
 SH_LOG_COMPILER = $(SHELL)
 
 TESTS = test/linux-ns-unshare.sh
-EXTRA_DIST = $(TESTS)
+EXTRA_DIST = $(TESTS) m4/NOTES
