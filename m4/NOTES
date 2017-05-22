@@ -1,0 +1,6 @@
+This directory was added to conform with modern autotools conventions,
+superseding acinclude.m4. Additional local Autoconf macros would
+reside here.
+
+This NOTES file exists to add the directory to git and effectively
+suppresses a spurious warning message.

@@ -23,7 +23,17 @@ list.
 Build instructions
 ------------------
 
-Requires libpcap.
+Requires libpcap, autoconf, and automake.
+
+```
+autoreconf -is
+./configure
+make
+make check
+sudo make install
+```
+
+If autotools displease you, it is still possible to build directly.
 
 `gcc -o choparp choparp.c -lpcap`
 
